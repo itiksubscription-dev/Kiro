@@ -25,36 +25,36 @@ data.filename = '';
 RECORD_FS     = 44100;
 
 % =========================================================================
-% ENHANCED THRESHOLDS — more robust detection
+% ENHANCED THRESHOLDS — ADJUSTED FOR ACCURACY (reduced false positives)
 % =========================================================================
 
-% --- Spectral irregularity thresholds ---
-T.knock_irreg     = 2.2;   % lowered slightly for better sensitivity
-T.valve_irreg     = 1.6;   % more sensitive to valve issues
-T.rough_irreg     = 2.8;   % increased for better specificity
+% --- Spectral irregularity thresholds (INCREASED for stricter detection) ---
+T.knock_irreg     = 3.5;   % much higher - normal engines are regular
+T.valve_irreg     = 2.8;   % increased - valve tapping must be clear
+T.rough_irreg     = 4.0;   % very high - rough idle is extremely chaotic
 
-% --- Band energy thresholds ---
-T.belt_band_pct   = 20;    % lowered for earlier detection
-T.valve_band_pct  = 18;    % more sensitive
+% --- Band energy thresholds (INCREASED - normal engines spread energy) ---
+T.belt_band_pct   = 28;    % raised - belt squeal is VERY high energy
+T.valve_band_pct  = 25;    % raised - valve issues need significant energy
 
 % --- Frequency thresholds ---
-T.rough_dom_max   = 500;   % dominant freq for rough idle
-T.centroid_fault  = 2000;  % lowered - faulty engines push energy up
+T.rough_dom_max   = 400;   % lowered - rough idle is very low frequency
+T.centroid_fault  = 2500;  % raised - normal engines can reach 2000Hz
 
-% --- NEW: Advanced feature thresholds ---
-T.zcr_high        = 0.15;  % high zero crossing rate (irregular)
-T.spectral_flux_high = 0.08; % high spectral change over time
-T.hnr_low         = 8.0;   % low harmonic-to-noise ratio (chaotic)
-T.energy_var_high = 0.35;  % high energy variation (unstable)
+% --- NEW: Advanced feature thresholds (STRICTER) ---
+T.zcr_high        = 0.20;  % raised - normal variation exists
+T.spectral_flux_high = 0.12; % raised - engines naturally vary
+T.hnr_low         = 6.0;   % lowered - only very chaotic sounds fail this
+T.energy_var_high = 0.50;  % raised - some variation is normal
 
-% --- Scoring weights ---
-W.knock  = [0.40 0.35 0.25]; % [irregularity, band_energy, zcr]
-W.belt   = [0.45 0.40 0.15]; % [band_energy, irregularity, rolloff]
-W.valve  = [0.35 0.35 0.30]; % [band_energy, irregularity, flux]
-W.rough  = [0.40 0.30 0.30]; % [irregularity, hnr, energy_var]
+% --- Scoring weights (REBALANCED for specificity) ---
+W.knock  = [0.50 0.35 0.15]; % more weight on irregularity
+W.belt   = [0.55 0.30 0.15]; % heavily weight band energy
+W.valve  = [0.45 0.35 0.20]; % balance all features
+W.rough  = [0.50 0.30 0.20]; % emphasize irregularity and HNR
 
-% --- Decision threshold: fault score must exceed this ---
-T.fault_score_min = 0.55;  % 0-1 scale, 0.55 = moderately confident
+% --- Decision threshold: RAISED to reduce false positives ---
+T.fault_score_min = 0.70;  % 0-1 scale, 0.70 = high confidence required
 
 
 % =========================================================================
@@ -642,33 +642,53 @@ text(axBanner,0.5,0.5,'Load or record audio, then click ANALYZE SIGNAL.', ...
     function score = scoreFault(faultType, irreg, bandR, zcr, flux, hnr, centroid, featStruct)
         switch faultType
             case 'knock'
-                % Knock: high irregularity in knock zone + mid-band energy + ZCR
-                s1 = min(1.0, irreg.knock / (T.knock_irreg * 1.5));
-                s2 = min(1.0, (bandR(2)+bandR(3)) / 50);
-                s3 = min(1.0, zcr / T.zcr_high);
-                score = W.knock(1)*s1 + W.knock(2)*s2 + W.knock(3)*s3;
+                % Knock: MUST exceed irregularity threshold AND have band energy
+                s1 = min(1.0, irreg.knock / (T.knock_irreg * 1.2));
+                s2 = min(1.0, (bandR(2)+bandR(3)) / 60);  % stricter
+                s3 = min(1.0, zcr / (T.zcr_high * 1.3));
+                % Only score if irregularity threshold is exceeded
+                if irreg.knock < T.knock_irreg * 0.8
+                    score = 0;
+                else
+                    score = W.knock(1)*s1 + W.knock(2)*s2 + W.knock(3)*s3;
+                end
                 
             case 'belt'
-                % Belt: high band 4 energy + irregularity + high centroid
-                s1 = min(1.0, bandR(4) / (T.belt_band_pct * 1.5));
-                s2 = min(1.0, irreg.belt / 3.0);
-                s3 = min(1.0, centroid / 4000);
-                score = W.belt(1)*s1 + W.belt(2)*s2 + W.belt(3)*s3;
+                % Belt: MUST have very high band 4 energy
+                s1 = min(1.0, bandR(4) / (T.belt_band_pct * 1.3));
+                s2 = min(1.0, irreg.belt / 4.5);  % stricter
+                s3 = min(1.0, centroid / 5000);   % stricter
+                % Belt squeal needs STRONG high-freq energy
+                if bandR(4) < T.belt_band_pct * 0.7
+                    score = 0;
+                else
+                    score = W.belt(1)*s1 + W.belt(2)*s2 + W.belt(3)*s3;
+                end
                 
             case 'valve'
-                % Valve: mid-high band energy + irregularity + spectral flux
-                s1 = min(1.0, bandR(3) / (T.valve_band_pct * 1.5));
-                s2 = min(1.0, irreg.valve / (T.valve_irreg * 1.5));
-                s3 = min(1.0, flux / T.spectral_flux_high);
-                score = W.valve(1)*s1 + W.valve(2)*s2 + W.valve(3)*s3;
+                % Valve: needs both band energy AND irregularity
+                s1 = min(1.0, bandR(3) / (T.valve_band_pct * 1.3));
+                s2 = min(1.0, irreg.valve / (T.valve_irreg * 1.2));
+                s3 = min(1.0, flux / (T.spectral_flux_high * 1.2));
+                % Must meet both energy and irregularity criteria
+                if bandR(3) < T.valve_band_pct * 0.7 || irreg.valve < T.valve_irreg * 0.8
+                    score = 0;
+                else
+                    score = W.valve(1)*s1 + W.valve(2)*s2 + W.valve(3)*s3;
+                end
                 
             case 'rough'
-                % Rough idle: low dominant freq + high irregularity + low HNR
+                % Rough idle: low dominant freq + VERY high irregularity + low HNR
                 if featStruct.domFreq < T.rough_dom_max
-                    s1 = min(1.0, irreg.knock / (T.rough_irreg * 1.2));
+                    s1 = min(1.0, irreg.knock / T.rough_irreg);
                     s2 = max(0, (T.hnr_low - hnr) / T.hnr_low);
-                    s3 = min(1.0, flux / T.spectral_flux_high);
-                    score = W.rough(1)*s1 + W.rough(2)*s2 + W.rough(3)*s3;
+                    s3 = min(1.0, flux / (T.spectral_flux_high * 1.3));
+                    % Must be VERY irregular
+                    if irreg.knock < T.rough_irreg * 0.85
+                        score = 0;
+                    else
+                        score = W.rough(1)*s1 + W.rough(2)*s2 + W.rough(3)*s3;
+                    end
                 else
                     score = 0;
                 end
