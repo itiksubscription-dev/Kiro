@@ -34,7 +34,7 @@ T.valve_irreg     = 2.8;   % increased - valve tapping must be clear
 T.rough_irreg     = 4.0;   % very high - rough idle is extremely chaotic
 
 % --- Band energy thresholds (INCREASED - normal engines spread energy) ---
-T.belt_band_pct   = 28;    % raised - belt squeal is VERY high energy
+T.belt_band_pct   = 35;    % MUCH higher - belt squeal has very strong high freq
 T.valve_band_pct  = 25;    % raised - valve issues need significant energy
 
 % --- Frequency thresholds ---
@@ -252,10 +252,10 @@ text(axBanner,0.5,0.5,'Load or record audio, then click ANALYZE SIGNAL.', ...
         Fs = data.Fs;
 
         % -----------------------------------------------------------------
-        % STEP 1: PRE-EMPHASIS FILTER (boost high frequencies)
-        % This helps detect belt squeal and valve tapping better
+        % STEP 1: MILD PRE-EMPHASIS (was too aggressive before)
+        % Reduced from 0.95 to 0.30 to avoid artificially boosting highs
         % -----------------------------------------------------------------
-        preEmph = 0.95;
+        preEmph = 0.30;
         xPre = filter([1 -preEmph], 1, x);
 
         % -----------------------------------------------------------------
@@ -607,6 +607,17 @@ text(axBanner,0.5,0.5,'Load or record audio, then click ANALYZE SIGNAL.', ...
         irreg.belt = zoneIrregularity(f, mag, 2000, 6000);
         irreg.valve = zoneIrregularity(f, mag, 800, 3000);
         
+        % NEW: Tonal peak detection (for real belt squeal)
+        % Belt squeal = sharp narrow peak in 2-5kHz, not broadband energy
+        beltZone = mag(f>=2000 & f<5000);
+        if length(beltZone) > 5
+            beltPeak = max(beltZone);
+            beltMean = mean(beltZone);
+            irreg.beltTonality = beltPeak / (beltMean + 1e-10);
+        else
+            irreg.beltTonality = 0;
+        end
+        
         % Centroid
         centroid = sum(f .* mag') / (sum(mag)+1e-10);
         
@@ -654,15 +665,19 @@ text(axBanner,0.5,0.5,'Load or record audio, then click ANALYZE SIGNAL.', ...
                 end
                 
             case 'belt'
-                % Belt: MUST have very high band 4 energy
-                s1 = min(1.0, bandR(4) / (T.belt_band_pct * 1.3));
-                s2 = min(1.0, irreg.belt / 4.5);  % stricter
-                s3 = min(1.0, centroid / 5000);   % stricter
-                % Belt squeal needs STRONG high-freq energy
-                if bandR(4) < T.belt_band_pct * 0.7
-                    score = 0;
+                % Belt squeal = SHARP TONAL PEAK in 2-5kHz (not just energy)
+                % Real belt squeal has peak-to-mean ratio > 8 in belt zone
+                tonality = irreg.beltTonality;
+                
+                % Require BOTH: high band energy AND strong tonal peak
+                if bandR(4) < T.belt_band_pct || tonality < 8.0
+                    score = 0;  % no broadband energy or no sharp peak = no squeal
                 else
-                    score = W.belt(1)*s1 + W.belt(2)*s2 + W.belt(3)*s3;
+                    s1 = min(1.0, bandR(4) / (T.belt_band_pct * 1.5));
+                    s2 = min(1.0, tonality / 15.0);  % tonality is the KEY feature
+                    s3 = min(1.0, irreg.belt / 5.0);
+                    % Weight tonality heavily (60%), then band energy (30%), irregularity (10%)
+                    score = 0.30*s1 + 0.60*s2 + 0.10*s3;
                 end
                 
             case 'valve'
