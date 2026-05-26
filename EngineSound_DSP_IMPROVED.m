@@ -503,7 +503,9 @@ text(axBanner,0.5,0.5,'Load or record audio, then click ANALYZE SIGNAL.', ...
         set(axBand,'XTick',1:4,'XTickLabel',faultNames,'FontSize',9);
         title(axBand,'Fault Scores  (Weighted Features)');
         xlabel(axBand,'Fault Type'); ylabel(axBand,'Score (0-1)');
-        ylim(axBand,[0 min(1.0, max(faultScores)*1.25)]); grid(axBand,'on');
+        % Ensure ylim upper bound is always > 0 (avoid error when all scores are 0)
+        ymax = max(0.1, min(1.0, max(faultScores)*1.25));
+        ylim(axBand,[0 ymax]); grid(axBand,'on');
 
         % RESULT BANNER
         drawBanner(faults,domFreq,faultScores,confidence,isNormal,nWindows);
